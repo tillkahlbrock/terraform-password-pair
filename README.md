@@ -186,9 +186,9 @@ The Terraform tests prove the behaviour instead of describing it:
 | `two_apply_rotation.tftest.hcl` | rotate plus swap promotes the new password in two applies, and the old password stays the backup |
 | `validation.tftest.hcl` | a broken control record fails before a password exists |
 
-Both suites run in CI. `.gitlab-ci.yml` is the pipeline that matters here, because GitLab
-CI is the target environment. `.github/workflows/ci.yml` mirrors it, so the checks also
-run where this repository is hosted. Neither pipeline needs a secret or a cloud account.
+Both suites run in CI. `.github/workflows/ci.yml` runs the format check, the validation,
+the Terraform tests, and the Go tests on every push. The pipeline needs no secret and no
+cloud account, because the module talks to no cloud API.
 
 ## Alternatives considered
 

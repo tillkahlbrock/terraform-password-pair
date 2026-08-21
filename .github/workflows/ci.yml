@@ -1,4 +1,4 @@
-# A mirror of .gitlab-ci.yml, so the checks also run where this repository is hosted.
+# The module talks to no cloud API, so no job needs a secret or an account.
 name: ci
 
 on:
