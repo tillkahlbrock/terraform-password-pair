@@ -217,6 +217,31 @@ idempotence requirement by construction, because an apply after the deadline cre
 password without an external trigger. A monotonic counter per slot is readable in a diff
 and auditable. An opaque token would work as well, but it says nothing in a review.
 
+## Simpler guards considered
+
+The pending-change guard runs a plan and reads one exit code. Three simpler designs
+exist. Each one trades something away.
+
+**Let the tool own the apply.** `pwctl rotate` edits the control record and runs the apply
+in one command. One command is then one operation and one apply, so the rule becomes a
+property of the workflow and the guard disappears. The apply also leaves the hands of the
+reviewer. A pipeline usually wants a plan before a credential changes, so the guard stays.
+
+**Check the rule in the pipeline.** The control record lives in the repository, so a merge
+request can carry the rule: read the record from the target branch, then fail when
+`active_slot` and a generation counter change in the same commit. That is ten lines of
+`jq` and no binary. The guarantee then equals "the pipeline applies every merge". Two
+merges before one apply still stack into one apply, so the local guard is the stronger
+rule.
+
+**Make the control record a log.** One input, an append-only list of operations, for
+example `["rotate", "swap", "rotate"]`. The module replays it: the active slot is the
+parity of the `swap` count, and the generation of a slot is one plus the number of
+rotations that happened while that slot was inactive. "Rotate and swap at the same time"
+then has no representation in the input, and the log doubles as an audit trail. The cost:
+the replay moves into HCL, the record grows without bound, and one rule survives anyway,
+because the log must not grow by two between two applies.
+
 ## Security notes
 
 - Both passwords are in the Terraform state, in clear text. This is true for every
