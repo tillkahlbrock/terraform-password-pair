@@ -1,0 +1,15 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# The state holds both passwords in clear text. Never commit a state file.
+*.tfvars
+!*.auto.tfvars.json
+
+# pwctl
+.pwctl.lock
+tools/pwctl/pwctl
