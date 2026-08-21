@@ -1,0 +1,50 @@
+# GitLab CI is the target environment, so this is the pipeline of record.
+# Neither job needs a secret or a cloud account.
+
+stages:
+  - check
+  - test
+
+variables:
+  TF_IN_AUTOMATION: "true"
+
+default:
+  interruptible: true
+
+.terraform:
+  image:
+    name: hashicorp/terraform:1.14
+    entrypoint: [""]
+
+terraform:format:
+  extends: .terraform
+  stage: check
+  script:
+    - terraform fmt -check -recursive -diff
+
+terraform:validate:
+  extends: .terraform
+  stage: check
+  script:
+    - terraform init -backend=false
+    - terraform validate
+    - cd examples/basic
+    - terraform init -backend=false
+    - terraform validate
+
+terraform:test:
+  extends: .terraform
+  stage: test
+  script:
+    - terraform init -backend=false
+    - terraform test
+
+pwctl:
+  stage: test
+  image: golang:1.25
+  script:
+    - cd tools/pwctl
+    - test -z "$(gofmt -l .)"
+    - go vet ./...
+    - go test ./...
+    - go build ./...
