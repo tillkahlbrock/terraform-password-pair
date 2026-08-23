@@ -8,14 +8,14 @@ terraform init
 terraform apply
 
 # Look at the state of the pair.
-../../tools/pwctl/pwctl status
+../../tools/pwctl status
 
 # Phase one: replace the backup password.
-../../tools/pwctl/pwctl rotate
+../../tools/pwctl rotate
 terraform apply
 
 # Phase two: promote it.
-../../tools/pwctl/pwctl swap
+../../tools/pwctl swap
 terraform apply
 ```
 
