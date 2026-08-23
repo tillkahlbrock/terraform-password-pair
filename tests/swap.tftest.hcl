@@ -37,4 +37,15 @@ run "after_swap" {
     condition     = output.fingerprints["a"] == run.before_swap.fingerprints["a"]
     error_message = "The demoted password must survive the swap."
   }
+
+  # The same invariant in the terms an operator reads: the two roles trade values.
+  assert {
+    condition     = output.active_fingerprint == run.before_swap.backup_fingerprint
+    error_message = "A swap must promote the former backup password."
+  }
+
+  assert {
+    condition     = output.backup_fingerprint == run.before_swap.active_fingerprint
+    error_message = "A swap must demote the former active password."
+  }
 }

@@ -40,4 +40,14 @@ run "after_rotation" {
     condition     = output.generations["b"] == 2
     error_message = "The module must report the new generation of the rotated slot."
   }
+
+  assert {
+    condition     = output.active_fingerprint == run.before_rotation.active_fingerprint
+    error_message = "A rotation must leave the live password in place."
+  }
+
+  assert {
+    condition     = output.backup_fingerprint != run.before_rotation.backup_fingerprint
+    error_message = "A rotation must replace the standby password."
+  }
 }

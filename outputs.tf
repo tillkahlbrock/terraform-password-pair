@@ -27,18 +27,20 @@ output "generations" {
 
 output "fingerprints" {
   description = <<-EOT
-    A stable, non-reversible identity per slot. Two runs with the same passwords
-    produce the same fingerprints. Use it to observe rotation and swap without
-    reading the secrets. The fingerprint is salted with the slot name and the
-    generation counter, so it does not help an offline attack on the password.
+    A stable, non-reversible identity per slot. Keyed by slot, so an entry is stable
+    for as long as that password is: a rotation changes one entry, and a swap changes
+    nothing. Use it to prove what was regenerated.
   EOT
 
-  value = {
-    for slot, password in random_password.slot :
-    slot => substr(
-      sha256("${slot}:${var.control.generations[slot]}:${nonsensitive(password.result)}"),
-      0,
-      16
-    )
-  }
+  value = local.fingerprints
+}
+
+output "active_fingerprint" {
+  description = "The identity of the live password. A swap changes this; a rotation does not."
+  value       = local.fingerprints[local.active_slot]
+}
+
+output "backup_fingerprint" {
+  description = "The identity of the standby password. A rotation changes this, and a swap does too."
+  value       = local.fingerprints[local.backup_slot]
 }

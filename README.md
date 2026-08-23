@@ -50,7 +50,7 @@ available as the backup. No phase invalidates a password that consumers still us
 ```
 .
 ├── main.tf, variables.tf, outputs.tf, versions.tf   the module
-├── tests/                                           terraform test, 17 assertions
+├── tests/                                           terraform test, 17 cases
 ├── examples/basic/                                  a root module and its control file
 └── tools/                                           the guard tool, bash and jq
 ```
@@ -96,13 +96,19 @@ Parameter Store breaks the substrate-agnostic requirement.
 | `backup_password` | the password that consumers must still accept (sensitive) |
 | `active_slot`, `backup_slot` | the current mapping. Read this instead of a resource address. |
 | `generations` | the counter per slot. It rises by one per rotation. |
-| `fingerprints` | a stable, non-reversible identity per slot |
+| `fingerprints` | a stable identity per slot, to prove what was regenerated |
+| `active_fingerprint`, `backup_fingerprint` | the same identity per role, to see what is live |
 
-`fingerprints` makes an operation observable without printing a secret. A rotation
-changes the fingerprint of the backup slot. A swap changes no fingerprint at all,
-because a swap moves no secret. The value is a truncated SHA-256 over the slot name, the
-generation, and the password. The slot name and the generation act as a salt, so the
-fingerprint does not help an attack on the password itself.
+The fingerprints make an operation observable without printing a secret, and they answer
+two different questions. `fingerprints` is keyed by slot, so an entry is stable for as long
+as that password is: a rotation changes one entry, and a swap changes nothing at all.
+`active_fingerprint` and `backup_fingerprint` are keyed by role, so they follow the roles: a
+rotation changes the backup view only, and a swap makes the two views trade places. Read the
+role views to see what is live, and the slot map to prove what was regenerated.
+
+Every value is a truncated SHA-256 over the slot name, the generation, and the password. The
+slot name and the generation act as a salt, so a fingerprint does not help an attack on the
+password itself.
 
 ## Operate
 
@@ -176,7 +182,7 @@ rename, so a reader never sees half a record.
 ## Test
 
 ```bash
-terraform test          # 17 assertions, no credentials, no cloud
+terraform test          # 17 cases, 28 checks, no credentials, no cloud
 tools/pwctl_test.sh     # 17 assertions over the record logic, the write, and the lock
 ```
 
@@ -187,7 +193,7 @@ The Terraform tests prove the behaviour instead of describing it:
 | `creation.tftest.hcl` | the first apply creates one password per slot |
 | `idempotence.tftest.hcl` | a second and a third apply keep both fingerprints |
 | `rotation.tftest.hcl` | a rotation changes the backup fingerprint and keeps the active one |
-| `swap.tftest.hcl` | a swap changes the roles and keeps both fingerprints |
+| `swap.tftest.hcl` | a swap changes the roles, keeps both slot fingerprints, and makes the role views trade |
 | `two_apply_rotation.tftest.hcl` | rotate plus swap promotes the new password in two applies, and the old password stays the backup |
 | `validation.tftest.hcl` | a broken control record fails before a password exists |
 
