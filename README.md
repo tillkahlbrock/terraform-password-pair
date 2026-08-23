@@ -52,7 +52,7 @@ available as the backup. No phase invalidates a password that consumers still us
 ├── main.tf, variables.tf, outputs.tf, versions.tf   the module
 ├── tests/                                           terraform test, 17 assertions
 ├── examples/basic/                                  a root module and its control file
-└── tools/pwctl/                                     the guard tool, Go, no dependencies
+└── tools/                                           the guard tool, bash and jq
 ```
 
 ## Use
@@ -112,10 +112,9 @@ fingerprint does not help an attack on the password itself.
 cd examples/basic
 terraform init && terraform apply        # the pair exists
 
-go build -o pwctl ../../tools/pwctl      # or install it once
-./pwctl status
-./pwctl rotate && terraform apply        # phase one: a new backup password
-./pwctl swap   && terraform apply        # phase two: promote it
+../../tools/pwctl status
+../../tools/pwctl rotate && terraform apply   # phase one: a new backup password
+../../tools/pwctl swap   && terraform apply   # phase two: promote it
 ```
 
 A real run of that sequence, with the fingerprints of both slots:
@@ -135,8 +134,8 @@ The bonus requirement asks that rotation and swap cannot run at the same time. `
 enforces it three times over:
 
 1. **One command, one operation.** There are no `--rotate` and `--swap` flags to combine.
-2. **An exclusive lock file** in the working directory. Two `pwctl` runs cannot edit the
-   control record at the same time.
+2. **An exclusive lock directory**, taken with `mkdir`, which is atomic. Two `pwctl` runs
+   cannot edit the control record at the same time.
 3. **A pending-change guard.** Before a write, `pwctl` runs
    `terraform plan -detailed-exitcode`. Exit code 2 means that a change still waits for an
    apply. `pwctl` then refuses the new operation and exits with code 3. A rotation and a
@@ -150,29 +149,35 @@ component that compares the desired state with the applied state, which is exact
 plan does. So the guard runs a plan and reads its exit code.
 
 `pwctl` refuses an operation before the first apply as well, because the initial create is
-a pending change. Apply first, then operate. `-skip-plan-check` exists for a broken state,
-and it prints a warning.
+a pending change. Apply first, then operate. `PWCTL_SKIP_PLAN_CHECK=1` exists for a broken
+state, and it prints a warning.
 
 `pwctl` never reads, writes, or logs a password. It only edits counters and one slot name.
 It keeps every other variable in the control file, and it replaces the file with an atomic
 rename.
 
+The tool has no flags. Environment variables cover the few knobs, and `cd` picks the
+working directory.
+
 ```
 pwctl status | rotate | swap
-  -dir string          Terraform working directory (default ".")
-  -file string         control file, relative to -dir
-  -var string          variable name in the control file (default "control")
-  -terraform string    binary to call; use tofu for OpenTofu
-  -skip-plan-check     turn the pending-change guard off
-  -dry-run             print the next record, write nothing
+  CONTROL_FILE             control file (default "passwords.auto.tfvars.json")
+  TERRAFORM                binary to call; use tofu for OpenTofu
+  LOCK_DIR                 lock directory (default ".pwctl.lock")
+  PWCTL_SKIP_PLAN_CHECK=1  turn the pending-change guard off
 exit codes: 0 done, 1 error, 3 refused because an apply is missing
 ```
+
+It is a bash script around `jq`. Three `jq` definitions carry the whole record logic, and
+the command name **is** the name of the `jq` function that runs, so one command cannot be
+two operations. The write goes to a temporary file in the same directory and lands with a
+rename, so a reader never sees half a record.
 
 ## Test
 
 ```bash
-terraform test                    # 17 assertions, no credentials, no cloud
-cd tools/pwctl && go test ./...   # 8 tests of the record logic and the lock
+terraform test          # 17 assertions, no credentials, no cloud
+tools/pwctl_test.sh     # 17 assertions over the record logic, the write, and the lock
 ```
 
 The Terraform tests prove the behaviour instead of describing it:
@@ -187,7 +192,7 @@ The Terraform tests prove the behaviour instead of describing it:
 | `validation.tftest.hcl` | a broken control record fails before a password exists |
 
 Both suites run in CI. `.github/workflows/ci.yml` runs the format check, the validation,
-the Terraform tests, and the Go tests on every push. The pipeline needs no secret and no
+the Terraform tests, `shellcheck`, and the guard tests on every push. The pipeline needs no secret and no
 cloud account, because the module talks to no cloud API.
 
 ## Alternatives considered
@@ -230,7 +235,7 @@ reviewer. A pipeline usually wants a plan before a credential changes, so the gu
 **Check the rule in the pipeline.** The control record lives in the repository, so a merge
 request can carry the rule: read the record from the target branch, then fail when
 `active_slot` and a generation counter change in the same commit. That is ten lines of
-`jq` and no binary. The guarantee then equals "the pipeline applies every merge". Two
+`jq` and no local tool at all. The guarantee then equals "the pipeline applies every merge". Two
 merges before one apply still stack into one apply, so the local guard is the stronger
 rule.
 
@@ -251,8 +256,8 @@ because the log must not grow by two between two applies.
   module that exposes them must mark its own outputs as well.
 - `fingerprints` is safe to log. It is a truncated hash over a salted 32-character random
   password.
-- Do not commit a `*.tfstate` file. `.gitignore` covers the state, the lock file, and the
-  local `pwctl` binary.
+- Do not commit a `*.tfstate` file. `.gitignore` covers the state, the lock directory, and
+  a temporary control file left behind by an interrupted write.
 - The state is the source of truth for a password, so a backend restore restores a
   credential pair. Keep the backup password acceptable to consumers for at least one
   rotation interval.

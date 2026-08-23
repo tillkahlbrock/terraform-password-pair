@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# pwctl owns the rotation control record of the password-pair module.
+#
+# One command is one operation. A lock blocks a parallel run, and a pending
+# change blocks the next operation, so rotation and swap cannot share an apply.
+#
+# Needs bash and jq. Run it in the Terraform working directory.
+set -euo pipefail
+
+CONTROL_FILE=${CONTROL_FILE:-passwords.auto.tfvars.json}
+TERRAFORM=${TERRAFORM:-terraform}
+LOCK_DIR=${LOCK_DIR:-.pwctl.lock}
+
+# The transformation and the validation live in jq. A command name is the name
+# of a jq function, so one command cannot be two operations.
+# shellcheck disable=SC2016  # $c is a jq variable, not a shell variable
+JQ_LIB='
+  def backup_slot: . as $c | $c.generations | keys | map(select(. != $c.active_slot)) | first;
+  def validate:
+    . as $c
+    | if ($c.generations | keys) != ["a", "b"] then error("generations must hold exactly the slots a and b")
+      elif ($c.active_slot | IN("a", "b") | not) then error("active_slot must be a or b")
+      elif any($c.generations[]; . < 1) then error("a generation is below one")
+      else $c end;
+  def rotate: .generations[backup_slot] += 1;
+  def swap:   .active_slot = backup_slot;
+  def show:   "active \(.active_slot), backup \(backup_slot), generations \(.generations)";
+'
+
+usage() {
+  cat >&2 <<'TXT'
+Usage: pwctl status | rotate | swap
+
+  status   print the current record
+  rotate   raise the generation of the backup slot; the next apply replaces that password
+  swap     exchange the roles of the two slots; the next apply replaces no password
+
+Environment: CONTROL_FILE, TERRAFORM, LOCK_DIR, PWCTL_SKIP_PLAN_CHECK=1
+Exit codes: 0 done, 1 error, 3 refused because an apply is missing
+TXT
+}
+
+die() { printf 'pwctl: %s\n' "$1" >&2; exit "${2:-1}"; }
+
+record() { jq -r "$JQ_LIB .control | validate | show" "$CONTROL_FILE"; }
+
+require_clean_plan() {
+  local code=0
+  "$TERRAFORM" plan -detailed-exitcode -input=false >/dev/null 2>&1 || code=$?
+  case $code in
+  0) : ;;
+  2) die "a change is already pending; run '$TERRAFORM apply' first" 3 ;;
+  *) die "'$TERRAFORM plan' failed; run it to see why" ;;
+  esac
+}
+
+operation=${1:-}
+case $operation in
+status) record; exit 0 ;;
+rotate | swap) ;;
+*) usage; exit 1 ;;
+esac
+
+# mkdir is atomic, so it is a lock.
+mkdir "$LOCK_DIR" 2>/dev/null || die "another run holds $LOCK_DIR"
+trap 'rmdir "$LOCK_DIR"' EXIT
+
+if [[ ${PWCTL_SKIP_PLAN_CHECK:-} == 1 ]]; then
+  printf 'pwctl: warning: the pending-change guard is off\n' >&2
+else
+  require_clean_plan
+fi
+
+before=$(record)
+temporary=$(mktemp "$CONTROL_FILE.XXXXXX")
+jq --indent 2 "$JQ_LIB .control |= (validate | $operation)" "$CONTROL_FILE" >"$temporary"
+chmod 644 "$temporary"          # mktemp creates 0600; keep the mode of a tracked file
+mv "$temporary" "$CONTROL_FILE" # a rename is atomic, so no reader sees half a record
+
+printf '%s\n  before: %s\n  after:  %s\n\nRun: %s apply\n' \
+  "$operation" "$before" "$(record)" "$TERRAFORM"

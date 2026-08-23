@@ -26,16 +26,7 @@ jobs:
 
   pwctl:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: tools/pwctl
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.25"
-          cache-dependency-path: tools/pwctl/go.mod
-      - run: test -z "$(gofmt -l .)"
-      - run: go vet ./...
-      - run: go test ./...
-      - run: go build ./...
+      - run: shellcheck tools/pwctl tools/pwctl_test.sh
+      - run: tools/pwctl_test.sh
