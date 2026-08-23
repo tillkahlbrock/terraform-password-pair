@@ -29,7 +29,8 @@ record**, and the outputs read it:
 counter is the only trigger for a new password. The two fields are one record with one
 writer, the `pwctl` tool.
 
-Every requirement follows from that one decision:
+Every requirement follows from that one separation — the password in a slot, the role in
+the control record:
 
 | Requirement | Mechanism | Applies |
 | --- | --- | --- |
