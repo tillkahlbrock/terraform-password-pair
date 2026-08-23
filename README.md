@@ -278,6 +278,15 @@ because the log must not grow by two between two applies.
 - Consumers must accept both passwords during a rotation. That is a property of the
   consuming system, not of this module. Where a system accepts one password only, the two
   phases become two short windows instead of a safe overlap.
+- **A hand edit can still break the pair. This is open.** `pwctl` is the only writer of the
+  control record by convention, not by control. Terraform keeps rejecting an invalid
+  record, so the slot names and the counters stay sound, but it cannot reject an invalid
+  *transition*: raising the counter of the active slot replaces the live password, and
+  moving both fields in one edit puts a rotation and a swap in one apply. Every rule beyond
+  validity compares the desired record with the applied one, and a configuration cannot read
+  the prior state. The fix belongs on the path that applies rather than in the tool: a job
+  before the apply that compares `terraform output` with the file and refuses a transition
+  that no single operation could produce. It is not implemented here.
 - `pwctl` locks the working directory. In a pipeline, the same guarantee needs the state
   lock of the backend, so let the pipeline own both steps of a phase.
 - A rotation schedule belongs in the pipeline, not in the module. `pwctl rotate` in a
