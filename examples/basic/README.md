@@ -19,6 +19,11 @@ terraform apply
 terraform apply
 ```
 
-`terraform output fingerprints` shows the effect of each phase without printing a
-secret. The rotation changes the fingerprint of the backup slot. The swap changes
-no fingerprint at all, because it moves no secret.
+`terraform output` shows the effect of each phase without printing a secret, and the
+fingerprints answer two questions.
+
+`active_fingerprint` and `backup_fingerprint` follow the roles. The rotation changes the
+backup view. The swap makes the two views trade places.
+
+`fingerprints` is keyed by slot instead, so the rotation changes one entry and the swap
+changes nothing at all. That is the proof that a swap moves no secret.

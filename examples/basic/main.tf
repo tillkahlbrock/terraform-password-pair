@@ -58,8 +58,18 @@ output "generations" {
 }
 
 output "fingerprints" {
-  description = "Watch these change across a rotation, and stay equal across a swap."
+  description = "Keyed by slot. Watch one entry change across a rotation, and all of them stay equal across a swap."
   value       = module.credentials.fingerprints
+}
+
+output "active_fingerprint" {
+  description = "Keyed by role. Watch this change across a swap."
+  value       = module.credentials.active_fingerprint
+}
+
+output "backup_fingerprint" {
+  description = "Keyed by role. Watch this change across a rotation and across a swap."
+  value       = module.credentials.backup_fingerprint
 }
 
 output "active_password" {

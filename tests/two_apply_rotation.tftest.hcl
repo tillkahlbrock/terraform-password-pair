@@ -28,7 +28,7 @@ run "apply_one_rotate_backup" {
   }
 
   assert {
-    condition     = output.fingerprints[output.active_slot] == run.day_zero.fingerprints["a"]
+    condition     = output.active_fingerprint == run.day_zero.active_fingerprint
     error_message = "Phase one must keep the active password in place."
   }
 }
@@ -44,12 +44,12 @@ run "apply_two_swap" {
   }
 
   assert {
-    condition     = output.fingerprints[output.active_slot] == run.apply_one_rotate_backup.fingerprints["b"]
+    condition     = output.active_fingerprint == run.apply_one_rotate_backup.backup_fingerprint
     error_message = "Phase two must promote the password created in phase one."
   }
 
   assert {
-    condition     = output.fingerprints[output.backup_slot] == run.day_zero.fingerprints["a"]
+    condition     = output.backup_fingerprint == run.day_zero.active_fingerprint
     error_message = "The password from before the rotation must remain the backup."
   }
 

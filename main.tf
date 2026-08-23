@@ -27,3 +27,16 @@ resource "random_password" "slot" {
     generation = tostring(var.control.generations[each.key])
   }
 }
+
+locals {
+  # One fingerprint per slot, so the outputs can report a password without
+  # exposing it. Salted with the slot name and the generation.
+  fingerprints = {
+    for slot, password in random_password.slot :
+    slot => substr(
+      sha256("${slot}:${var.control.generations[slot]}:${nonsensitive(password.result)}"),
+      0,
+      16
+    )
+  }
+}
