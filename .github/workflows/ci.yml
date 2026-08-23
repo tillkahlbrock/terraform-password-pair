@@ -28,5 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The guard test runs a real plan and apply, so this job needs Terraform too.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.8
+          terraform_wrapper: false
       - run: shellcheck tools/pwctl tools/pwctl_test.sh
       - run: tools/pwctl_test.sh
