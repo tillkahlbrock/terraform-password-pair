@@ -72,9 +72,10 @@ else
 fi
 
 before=$(record)
+mode=$(stat -c '%a' "$CONTROL_FILE" 2>/dev/null || stat -f '%Lp' "$CONTROL_FILE")
 temporary=$(mktemp "$CONTROL_FILE.XXXXXX")
 jq --indent 2 "$JQ_LIB .control |= (validate | $operation)" "$CONTROL_FILE" >"$temporary"
-chmod 644 "$temporary"          # mktemp creates 0600; keep the mode of a tracked file
+chmod "$mode" "$temporary"      # mktemp creates 0600; the control file keeps the mode it had
 mv "$temporary" "$CONTROL_FILE" # a rename is atomic, so no reader sees half a record
 
 printf '%s\n  before: %s\n  after:  %s\n\nRun: %s apply\n' \

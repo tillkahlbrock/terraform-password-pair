@@ -4,6 +4,7 @@
 set -euo pipefail
 
 PWCTL=$(cd "$(dirname "$0")" && pwd)/pwctl
+REPO=$(cd "$(dirname "$0")/.." && pwd)
 CONTROL=passwords.auto.tfvars.json
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "$WORKDIR"' EXIT
@@ -128,6 +129,62 @@ t_the_file_mode_survives() {
   chmod 644 "$directory/$CONTROL"
   pwctl "$directory" rotate >/dev/null
   check "the control file keeps mode 644" "644" "$(mode_of "$directory/$CONTROL")"
+}
+
+t_a_private_control_file_stays_private() {
+  local directory
+  directory=$(setup private-mode)
+  chmod 600 "$directory/$CONTROL"
+  pwctl "$directory" rotate >/dev/null
+  check "a control file kept at 600 stays at 600" "600" "$(mode_of "$directory/$CONTROL")"
+}
+
+# The pending-change guard is the one rule that needs a real plan, so this test
+# runs pwctl without PWCTL_SKIP_PLAN_CHECK against a real state.
+t_the_guard_refuses_a_second_operation_before_an_apply() {
+  if ! command -v terraform >/dev/null; then
+    if [[ -n ${CI:-} ]]; then
+      printf 'FAIL the guard test needs terraform, and this is CI\n'
+      failures=$((failures + 1))
+    else
+      printf 'skip the guard test: terraform is not installed\n'
+    fi
+    return
+  fi
+
+  local directory status=0
+  directory=$(setup guard)
+  cat >"$directory/main.tf" <<EOF
+module "credentials" {
+  source  = "$REPO"
+  control = var.control
+}
+
+variable "control" {
+  type = object({
+    active_slot = string
+    generations = map(number)
+  })
+}
+EOF
+
+  (cd "$directory" && terraform init -input=false >/dev/null && terraform apply -auto-approve >/dev/null)
+
+  # The first operation passes the guard, because the state is in sync.
+  (cd "$directory" && "$PWCTL" rotate >/dev/null)
+  check "the guard passes a first operation" \
+    '{"active_slot":"a","generations":{"a":1,"b":2}}' "$(control_of "$directory")"
+
+  # The second one is refused with exit code 3, because an apply is missing.
+  (cd "$directory" && "$PWCTL" swap >/dev/null 2>&1) || status=$?
+  check "the guard refuses a second operation before the apply" "3" "$status"
+  check "the refused operation wrote nothing" \
+    '{"active_slot":"a","generations":{"a":1,"b":2}}' "$(control_of "$directory")"
+
+  # After the apply the guard opens again.
+  (cd "$directory" && terraform apply -auto-approve >/dev/null && "$PWCTL" swap >/dev/null)
+  check "the guard passes the next operation after the apply" \
+    '{"active_slot":"b","generations":{"a":1,"b":2}}' "$(control_of "$directory")"
 }
 
 t_the_lock_is_exclusive() {

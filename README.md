@@ -35,7 +35,7 @@ the control record:
 | Requirement | Mechanism | Applies |
 | --- | --- | --- |
 | Create two passwords | one `random_password` per slot | 1 |
-| Rotate the backup password only | raise the generation counter of the **inactive** slot. `keepers` replaces that instance, and only that instance. | 1 |
+| Rotate the backup password only | raise the generation counter of one slot. `keepers` replaces that instance, and only that instance. Aiming at the standby slot is the tool's job, not the module's. | 1 |
 | Swap the roles | flip `active_slot`. **No** resource changes. Only the output mapping changes, so no password is generated. | 1 |
 | Idempotence | `keepers` is a pure function of the input. An unchanged control record produces an empty plan. | 0 |
 | Substrate-agnostic | `hashicorp/random` only. The module returns values and owns no sink. | — |
@@ -112,7 +112,9 @@ password itself.
 
 ## Operate
 
-`pwctl` is the only writer of the control record. One command is one operation.
+`pwctl` writes the control record, by convention rather than by control. One command is one
+operation. Nothing stops a person from editing the file instead, and the last entry under
+[Limits](#limits-and-next-steps) says what that costs.
 
 ```bash
 cd examples/basic
@@ -144,8 +146,9 @@ enforces it three times over:
    cannot edit the control record at the same time.
 3. **A pending-change guard.** Before a write, `pwctl` runs
    `terraform plan -detailed-exitcode`. Exit code 2 means that a change still waits for an
-   apply. `pwctl` then refuses the new operation and exits with code 3. A rotation and a
-   swap can therefore never land in the same apply.
+   apply. `pwctl` then refuses the new operation and exits with code 3. A rotation and a swap
+   therefore do not land in the same apply, for as long as the guard is on. It has an
+   off switch, and the paragraph below says so.
 
 Rule 3 has to be external, and this is the interesting part. Terraform evaluates the
 configuration against the prior state, but the configuration cannot **read** that prior
@@ -157,6 +160,10 @@ plan does. So the guard runs a plan and reads its exit code.
 `pwctl` refuses an operation before the first apply as well, because the initial create is
 a pending change. Apply first, then operate. `PWCTL_SKIP_PLAN_CHECK=1` exists for a broken
 state, and it prints a warning.
+
+`tools/pwctl_test.sh` covers this guard against a real state: it applies a throwaway root
+module, rotates, and asserts that the next operation exits with code 3 until the apply has
+run. That test is the only one that leaves the switch on.
 
 `pwctl` never reads, writes, or logs a password. It only edits counters and one slot name.
 It keeps every other variable in the control file, and it replaces the file with an atomic
@@ -183,7 +190,7 @@ rename, so a reader never sees half a record.
 
 ```bash
 terraform test          # 17 cases, 28 checks, no credentials, no cloud
-tools/pwctl_test.sh     # 17 assertions over the record logic, the write, and the lock
+tools/pwctl_test.sh     # 22 assertions over the record logic, the write, the lock, and the guard
 ```
 
 The Terraform tests prove the behaviour instead of describing it:
