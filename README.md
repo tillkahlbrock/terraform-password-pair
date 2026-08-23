@@ -10,14 +10,9 @@ Kubernetes, a database user, or anything else.
 
 ## The idea: a role is a mapping, not a property
 
-A first design gives each role its own resource: `random_password.active` and
-`random_password.backup`. That design cannot swap. The role is then a property of the
-resource, so an exchange needs state surgery or a new password. Both are wrong: one is
-not reproducible, the other destroys the credential it is supposed to keep.
-
-This module makes the two passwords **peers**. It creates one password per **slot**,
-`a` and `b`. Neither slot means "active". The role lives in a **control record** that
-the outputs read:
+The module creates one password per **slot**, `a` and `b`. The two are peers: neither slot
+means "active", and neither resource knows its own role. The role lives in a **control
+record**, and the outputs read it:
 
 ```
                 control record
@@ -29,6 +24,10 @@ the outputs read:
         active_password  → slot a
         backup_password  → slot b
 ```
+
+`active_slot` names the slot that is live. `generations` holds one counter per slot, and a
+counter is the only trigger for a new password. The two fields are one record with one
+writer, the `pwctl` tool.
 
 Every requirement follows from that one decision:
 
@@ -203,13 +202,17 @@ cloud account, because the module talks to no cloud API.
 
 ## Alternatives considered
 
-**Fixed roles plus `moved` blocks or `terraform state mv`.** The resource address then
-carries the role, which reads well. It does not work. A simultaneous exchange of two
-addresses is not expressible with `moved` blocks; it needs a three-step move through a
-temporary address, so several applies and a configuration edit between them.
-`terraform state mv` is imperative state surgery beside the plan and apply model: not
-reviewable, not idempotent, and unsafe in a pipeline. The `keepers` expressions would also
-have to follow every move, or the next plan replaces the password. Rejected.
+**Fixed roles: `random_password.active` and `random_password.backup`.** The resource address
+then carries the role, which reads well. It also makes the role a property of the resource,
+so an exchange needs either state surgery or a new password. One is not reproducible, the
+other destroys the credential it is meant to keep.
+
+Neither mechanism holds up. A simultaneous exchange of two addresses is not expressible with
+`moved` blocks; it needs a three-step move through a temporary address, so several applies and
+a configuration edit between them. `terraform state mv` is imperative state surgery beside the
+plan and apply model: not reviewable, not idempotent, and unsafe in a pipeline. The `keepers`
+expressions would also have to follow every move, or the next plan replaces the password.
+Rejected.
 
 **Fixed roles, copy the value across on a swap.** A `random_password` value comes from the
 provider and cannot be assigned. This design needs a value-carrying layer, so the same
