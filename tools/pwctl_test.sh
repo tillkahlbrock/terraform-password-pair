@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Tests for tools/pwctl. They need bash and jq, no Terraform and no network:
-# PWCTL_SKIP_PLAN_CHECK turns off the one check that runs a plan.
+# Tests for tools/pwctl. Most cases need bash and jq only, and run with
+# PWCTL_SKIP_PLAN_CHECK=1, which turns off the one check that runs a plan. The guard case
+# needs Terraform, because it applies a throwaway root module and leaves that check on.
 set -euo pipefail
 
 PWCTL=$(cd "$(dirname "$0")" && pwd)/pwctl

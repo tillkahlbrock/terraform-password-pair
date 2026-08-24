@@ -144,11 +144,13 @@ apply 3   No changes.
 ### The guard, and why it lives outside Terraform
 
 The bonus requirement asks that rotation and swap cannot run at the same time. `pwctl`
-enforces it three times over:
+enforces it three times over, and the three differ in reach:
 
 1. **One command, one operation.** There are no `--rotate` and `--swap` flags to combine.
-2. **An exclusive lock directory**, taken with `mkdir`, which is atomic. Two `pwctl` runs
-   cannot edit the control record at the same time.
+2. **An exclusive lock directory**, taken with `mkdir`, which is atomic. Two `pwctl` runs in
+   the same working directory cannot edit the control record at the same time. Two checkouts
+   hold two locks, so this rule reaches one directory and no further; see
+   [Limits](#limits-and-next-steps).
 3. **A pending-change guard.** Before a write, `pwctl` runs
    `terraform plan -detailed-exitcode`. Exit code 2 means that a change still waits for an
    apply. `pwctl` then refuses the new operation and exits with code 3. A rotation and a swap
@@ -181,7 +183,7 @@ rest. It exits 3 when it refuses because an apply is missing.
 ## Test
 
 ```bash
-terraform test          # 17 cases, 28 checks, no credentials, no cloud
+terraform test          # 20 cases, 31 checks, no credentials, no cloud
 tools/pwctl_test.sh     # 22 assertions over the record logic, the write, the lock, and the guard
 ```
 
@@ -194,7 +196,12 @@ The Terraform tests prove the behaviour instead of describing it:
 | `rotation.tftest.hcl` | a rotation changes the backup fingerprint and keeps the active one |
 | `swap.tftest.hcl` | a swap changes the roles, keeps both slot fingerprints, and makes the role views trade |
 | `two_apply_rotation.tftest.hcl` | rotate plus swap promotes the new password in two applies, and the old password stays the backup |
-| `validation.tftest.hcl` | a broken control record fails before a password exists |
+| `validation.tftest.hcl` | a broken control record or password spec fails before a password exists |
+
+`terraform test` cannot assert an empty plan, so the idempotence test proves idempotence
+through stable fingerprints instead. The empty plan itself is asserted in
+`tools/pwctl_test.sh`: the guard test runs `pwctl rotate` directly after an apply, and that
+only passes when `terraform plan -detailed-exitcode` returns 0.
 
 Both suites run in CI. `.github/workflows/ci.yml` runs the format check, the validation,
 the Terraform tests, `shellcheck`, and the guard tests on every push. The pipeline needs no secret and no
@@ -217,13 +224,15 @@ produces.
 - The two password outputs are marked `sensitive`, so a plan or an apply prints
   `<sensitive>` in their place. The other six outputs are plain on purpose. A root module
   that exposes the passwords must mark its own outputs as well.
-- The three fingerprint outputs are safe to log. What protects them is the entropy of the
-  password, not the salt: `slot:generation` is predictable, and it only keeps the
-  fingerprints of one value distinct across slots and generations. Even the weakest shape
-  this module accepts, 16 characters from a single character class, carries about 2^75
-  possibilities. The hash is truncated to 64 bits, which is enough to compare two
-  fingerprints, so "equal fingerprints, equal password" holds with probability 1 - 2^-64
-  rather than absolutely.
+- The three fingerprint outputs are safe to log for the default password shape, and the
+  reason is the entropy of the password rather than the salt: `slot:generation` is
+  predictable, and it only keeps the fingerprints of one value distinct across slots and
+  generations. The floor the validations allow is far lower than the default. A caller may
+  set `length = 16` with `upper`, `lower` and `special` off, which is 16 digits, about 2^53,
+  and within reach of a targeted brute force against a known salt. Narrow `password_spec`
+  that far and the fingerprints become sensitive too.
+- The hash is truncated to 64 bits, which is enough to compare two fingerprints, so "equal
+  fingerprints, equal password" holds with probability 1 - 2^-64 rather than absolutely.
 - Do not commit a `*.tfstate` file. `.gitignore` covers the state, the lock directory, and
   a temporary control file left behind by an interrupted write.
 - The state is the source of truth for a password, so a backend restore restores a

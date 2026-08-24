@@ -63,3 +63,45 @@ run "special_characters_contradict_the_minimum" {
 
   expect_failures = [var.password_spec]
 }
+
+run "extra_generation_counter" {
+  command = plan
+
+  variables {
+    control = {
+      active_slot = "a"
+      generations = { a = 1, b = 1, c = 1 }
+    }
+  }
+
+  expect_failures = [var.control]
+}
+
+run "fractional_generation" {
+  command = plan
+
+  variables {
+    control = {
+      active_slot = "a"
+      generations = { a = 1, b = 1.5 }
+    }
+  }
+
+  expect_failures = [var.control]
+}
+
+run "length_below_the_sum_of_the_minimums" {
+  command = plan
+
+  variables {
+    password_spec = {
+      length      = 16
+      min_upper   = 8
+      min_lower   = 8
+      min_numeric = 8
+      min_special = 8
+    }
+  }
+
+  expect_failures = [var.password_spec]
+}
