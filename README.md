@@ -45,17 +45,10 @@ The two phases are the point, not a limitation. Phase one creates the next passw
 the current one stays valid. Phase two promotes it, and the previous password stays
 available as the backup. No phase invalidates a password that consumers still use.
 
-## Layout
-
-```
-.
-├── main.tf, variables.tf, outputs.tf, versions.tf   the module
-├── tests/                                           terraform test, 17 cases
-├── examples/basic/                                  a root module and its control file
-└── tools/                                           the guard tool, bash and jq
-```
-
 ## Use
+
+Terraform 1.6 or newer (the floor for `terraform test`) and `hashicorp/random` 3.5 or newer.
+`pwctl` needs `bash` and `jq`.
 
 ```hcl
 module "credentials" {
@@ -88,6 +81,23 @@ alternatives are worse: a `-var` flag hides the current state and a forgotten fl
 reverts a swap without a trace; a workspace variable in Terraform Cloud, SSM, or
 Parameter Store breaks the substrate-agnostic requirement.
 
+### Inputs
+
+`control` is the rotation control record, an object of `active_slot` and `generations`. It
+defaults to slot `a` active with both counters at 1. Terraform rejects a record where
+`active_slot` is not `a` or `b`, where `generations` does not hold exactly those two keys, or
+where a counter is not an integer of 1 or more. `pwctl` owns this value.
+
+`password_spec` shapes both passwords, and both slots share one shape. Every field is
+optional:
+
+| Field | Default | Note |
+| --- | --- | --- |
+| `length` | `32` | at least 16, and at least the sum of the four minimums |
+| `upper`, `lower`, `numeric`, `special` | `true` | which character classes may appear |
+| `min_upper`, `min_lower`, `min_numeric`, `min_special` | `1` | `min_special` must be 0 when `special` is false |
+| `override_special` | `null` | replaces the provider's set of special characters |
+
 ### Outputs
 
 | Output | Purpose |
@@ -106,9 +116,8 @@ as that password is: a rotation changes one entry, and a swap changes nothing at
 rotation changes the backup view only, and a swap makes the two views trade places. Read the
 role views to see what is live, and the slot map to prove what was regenerated.
 
-Every value is a truncated SHA-256 over the slot name, the generation, and the password. The
-slot name and the generation act as a salt, so a fingerprint does not help an attack on the
-password itself.
+Every value is a truncated SHA-256 over the slot name, the generation, and the password. Why
+that is safe to log is in [Security notes](#security-notes).
 
 ## Operate
 
@@ -210,6 +219,8 @@ cloud account, because the module talks to no cloud API.
 
 ## Alternatives considered
 
+### The design
+
 **Fixed roles: `random_password.active` and `random_password.backup`.** The resource address
 then carries the role, which reads well. It also makes the role a property of the resource,
 so an exchange needs either state surgery or a new password. One is not reproducible, the
@@ -279,7 +290,7 @@ A monotonic counter per slot is explicit, readable in a diff, and auditable. `1 
 only that something changed, which is little help in a merge request. Rejected — although a
 schedule is what a production rotation wants, and this brief rules it out.
 
-## Simpler guards considered
+### The guard
 
 The pending-change guard runs a plan and reads one exit code. Three simpler designs
 exist. Each one trades something away.
@@ -369,3 +380,13 @@ generated password straight into the active role in a single apply, with no prop
   never depends on the clock. With `time_rotating` the clock is part of the configuration;
   here it is part of the trigger. Terraform stays idempotent, and the scheduler is what
   moves.
+
+## Layout
+
+```
+.
+├── main.tf, variables.tf, outputs.tf, versions.tf   the module
+├── tests/                                           terraform test, 17 cases
+├── examples/basic/                                  a root module and its control file
+└── tools/                                           the guard tool, bash and jq
+```
