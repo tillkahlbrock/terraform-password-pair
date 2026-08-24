@@ -284,25 +284,41 @@ schedule is what a production rotation wants, and this brief rules it out.
 The pending-change guard runs a plan and reads one exit code. Three simpler designs
 exist. Each one trades something away.
 
-**Let the tool own the apply.** `pwctl rotate` edits the control record and runs the apply
-in one command. One command is then one operation and one apply, so the rule becomes a
-property of the workflow and the guard disappears. The apply also leaves the hands of the
-reviewer. A pipeline usually wants a plan before a credential changes, so the guard stays.
+**Let the tool own the apply.** `pwctl rotate` edits the control record and runs the apply in
+one command. One command is then one operation and one apply, so the rule stops being a check
+and becomes a property of the workflow, which is always the stronger form. The apply leaves the
+hands of the reviewer, and a pipeline usually wants a plan before a credential changes. It also
+does nothing about a hand edit: whoever writes the file and applies it directly passes this
+design and the shipped guard alike.
 
 **Check the rule in the pipeline.** The control record lives in the repository, so a merge
-request can carry the rule: read the record from the target branch, then fail when
-`active_slot` and a generation counter change in the same commit. That is ten lines of
-`jq` and no local tool at all. The guarantee then equals "the pipeline applies every merge". Two
-merges before one apply still stack into one apply, so the local guard is the stronger
-rule.
+request can carry the rule: read the record from the target branch and judge the transition.
+About fifteen lines of `jq` reject every transition that no single operation could produce — a
+swap together with a rotation, more than one counter moving, a counter that jumps by two or
+falls, and a rotation that targets the active slot instead of the standby one. No local tool is
+needed at all.
 
-**Make the control record a log.** One input, an append-only list of operations, for
-example `["rotate", "swap", "rotate"]`. The module replays it: the active slot is the
-parity of the `swap` count, and the generation of a slot is one plus the number of
-rotations that happened while that slot was inactive. "Rotate and swap at the same time"
-then has no representation in the input, and the log doubles as an audit trail. The cost:
-the replay moves into HCL, the record grows without bound, and one rule survives anyway,
-because the log must not grow by two between two applies.
+Neither guard dominates the other. The local one binds whoever runs `pwctl`, and a hand edit
+followed by a direct apply never reaches it. The pipeline one binds whatever goes through a
+merge request, and two merges before one apply still stack. Only a check on the path that
+applies, comparing `terraform output` with the file, binds every route; the last entry under
+[Limits](#limits-and-next-steps) says why that one is missing here.
+
+**Make the control record a log.** One input, an append-only list of operations, for example
+`["rotate", "swap", "rotate"]`. The module replays it: the parity of the `swap` entries gives
+the active slot, and a `rotate` at position *i* hits the slot that was not active at that point.
+The replay is about ten lines of HCL and it works — that log yields `active=b` with generations
+`{a: 2, b: 2}`.
+
+It buys the strongest property in this document: which slot a rotation hits is derived, not
+supplied, so "rotate the active password" has no representation in the input at all. It is not
+checked, it is unexpressible. The log doubles as an audit trail.
+
+The costs are real. The replay lives in HCL, the record grows without bound, and editing history
+instead of appending to it re-derives everything after the edited entry: changing the first entry
+plans `1 to add, 0 to change, 1 to destroy`, so tampering announces itself by destroying a
+credential. One rule also survives. Appending `"rotate"` and `"swap"` in one go puts a freshly
+generated password straight into the active role in a single apply, with no propagation window.
 
 ## Security notes
 
