@@ -215,29 +215,69 @@ then carries the role, which reads well. It also makes the role a property of th
 so an exchange needs either state surgery or a new password. One is not reproducible, the
 other destroys the credential it is meant to keep.
 
-Neither mechanism holds up. A simultaneous exchange of two addresses is not expressible with
-`moved` blocks; it needs a three-step move through a temporary address, so several applies and
-a configuration edit between them. `terraform state mv` is imperative state surgery beside the
-plan and apply model: not reviewable, not idempotent, and unsafe in a pipeline. The `keepers`
-expressions would also have to follow every move, or the next plan replaces the password.
-Rejected.
+Neither mechanism holds up. `moved` blocks cannot express the exchange at all: a plan fails
+with *"Moved object still exists"*, because a move means that the source address is gone from
+the configuration, while a swap needs both addresses to stay. The way around it is a three-step
+move through a temporary address, so three configuration edits and three applies, which busts
+the two-apply requirement on its own.
 
-**Fixed roles, copy the value across on a swap.** A `random_password` value comes from the
-provider and cannot be assigned. This design needs a value-carrying layer, so the same
-secret then exists under two addresses in the state, and the invariant "the backup after a
-swap is the former active password" depends on the order inside a single apply.
-`lifecycle.ignore_changes` would also hide real drift. More parts, less proof. Rejected.
+`terraform state mv` does perform the exchange, and that is the trap. It is imperative state
+surgery beside the plan and apply model: not reviewable in a diff, not idempotent, and unsafe
+in a pipeline. Worse, the keeper values travel with the resources while the configuration keys
+them by role, so the objects land at addresses whose keeper expressions no longer match. The
+next plan — any plan, not the next rotation — then reports `2 to add, 0 to change, 2 to
+destroy`. The swap succeeds and leaves a mine that destroys both credentials. Rejected.
 
-**A ring of N slots with a moving pointer.** This generalises the design and handles an
-N-way rotation with one operation. It also merges rotation and swap into one operation
-called "advance", and this task needs them separate and mutually exclusive. The module
-keeps two slots on purpose. The step to N slots is a change to `local.slots` and to the
-control record, not to the design.
+**Fixed roles, copy the value across on a swap.** A `random_password` value is computed by the
+provider, so it cannot be assigned. The design therefore needs a value-carrying resource, and
+that resource holds a second copy of the secret: after one apply the same cleartext password
+sits under two addresses in the state. The doubling is the mechanism here, not a side effect.
+
+The invariant the design exists for — after a swap the backup holds the value that was active
+before — cannot be expressed at all. A carrier can only mirror the current value. Reading its
+own previous one fails with *"Self-referential block"*, and routing it through a second carrier
+fails with *"Cycle"*. The configuration is a graph over the desired state, and "the value from
+before this apply" is not a node in that graph.
+
+`lifecycle { ignore_changes = [input] }` looks like the way out, but it freezes the carrier at
+creation time instead of lagging one step behind. After two rotations the backup holds a value
+that is two generations old, and nothing reports it. A backup that falls arbitrarily far behind
+while looking healthy is worse than none. More parts, one more copy of every secret, and the
+central invariant still unstated. Rejected.
+
+**A ring of N slots with a moving pointer.** One operation, "advance", moves the pointer and
+regenerates the slot that falls off the back. With three slots or more the overlap window gets
+*longer* than the two-slot design allows: the password that was active stays valid as the first
+backup, so a consumer that lags a deploy cycle still holds a value that is accepted.
+Operationally that is the stronger design.
+
+It is rejected on scope, not on merit. The brief asks for rotation and swap as two separate
+operations, and it asks that they cannot run at the same time. "Advance" fuses them, so the
+bonus requirement is not met but voided: nothing is left to exclude. Had the requirement been
+an N-way rotation with history, this is what the module would be.
+
+Two slots therefore stay on purpose, and going to N is not a one-line change. Both hardcoded
+validations in `variables.tf` have to move; `backup_slot` then stops resolving, because `one()`
+receives more than one candidate; and `backup_password`, `backup_slot` and `backup_fingerprint`
+lose their meaning once "the backup" is no longer a single thing. That last part is a change to
+the output contract, which is a change to the design.
 
 **A timestamp or `time_rotating` as the trigger.** Time-based regeneration breaks the
-idempotence requirement by construction, because an apply after the deadline creates a new
-password without an external trigger. A monotonic counter per slot is readable in a diff
-and auditable. An opaque token would work as well, but it says nothing in a review.
+idempotence requirement by construction, and it breaks it in the worst way. Inside the window a
+plan reports `No changes`. Once the due date passes, the very same configuration replaces the
+`time_rotating` resource, which changes the keeper, which replaces the password. Nobody
+triggered anything; the clock moved. The requirement holds right up until it does not, so a
+reviewer who applies twice sees an idempotence that is not there.
+
+It also forces a decision about how many clocks to run. One shared time source rotates both
+passwords at the same deadline and destroys the overlap the design exists for, in a single
+apply. Avoiding that means one time source per slot with offset schedules: the two phases
+rebuilt as a pair of cron jobs that must never coincide.
+
+A monotonic counter per slot is explicit, readable in a diff, and auditable. `1 → 2` says
+"second rotation of this slot". An opaque token works mechanically, but `f3a9… → 7c21…` says
+only that something changed, which is little help in a merge request. Rejected — although a
+schedule is what a production rotation wants, and this brief rules it out.
 
 ## Simpler guards considered
 
