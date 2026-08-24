@@ -109,15 +109,11 @@ optional:
 | `fingerprints` | a stable identity per slot, to prove what was regenerated |
 | `active_fingerprint`, `backup_fingerprint` | the same identity per role, to see what is live |
 
-The fingerprints make an operation observable without printing a secret, and they answer
-two different questions. `fingerprints` is keyed by slot, so an entry is stable for as long
-as that password is: a rotation changes one entry, and a swap changes nothing at all.
-`active_fingerprint` and `backup_fingerprint` are keyed by role, so they follow the roles: a
-rotation changes the backup view only, and a swap makes the two views trade places. Read the
-role views to see what is live, and the slot map to prove what was regenerated.
-
-Every value is a truncated SHA-256 over the slot name, the generation, and the password. Why
-that is safe to log is in [Security notes](#security-notes).
+The fingerprints make an operation observable without printing a secret. `fingerprints` is
+keyed by slot, so a rotation changes one entry and a swap changes nothing at all: read it to
+prove what was regenerated. The role views follow the roles: read them to see what is live.
+Every value is a truncated SHA-256 over the slot name, the generation, and the password, and
+why that is safe to log is in [Security notes](#security-notes).
 
 ## Operate
 
@@ -178,22 +174,9 @@ run. That test is the only one that leaves the switch on.
 It keeps every other variable in the control file, and it replaces the file with an atomic
 rename.
 
-The tool has no flags. Environment variables cover the few knobs, and `cd` picks the
-working directory.
-
-```
-pwctl status | rotate | swap
-  CONTROL_FILE             control file (default "passwords.auto.tfvars.json")
-  TERRAFORM                binary to call; use tofu for OpenTofu
-  LOCK_DIR                 lock directory (default ".pwctl.lock")
-  PWCTL_SKIP_PLAN_CHECK=1  turn the pending-change guard off
-exit codes: 0 done, 1 error, 3 refused because an apply is missing
-```
-
-It is a bash script around `jq`. Three `jq` definitions carry the whole record logic, and
-the command name **is** the name of the `jq` function that runs, so one command cannot be
-two operations. The write goes to a temporary file in the same directory and lands with a
-rename, so a reader never sees half a record.
+`pwctl` has no flags. `CONTROL_FILE`, `TERRAFORM`, `LOCK_DIR` and `PWCTL_SKIP_PLAN_CHECK`
+cover the knobs, `cd` picks the working directory, and `pwctl` without an argument prints the
+rest. It exits 3 when it refuses because an apply is missing.
 
 ## Test
 
@@ -217,119 +200,14 @@ Both suites run in CI. `.github/workflows/ci.yml` runs the format check, the val
 the Terraform tests, `shellcheck`, and the guard tests on every push. The pipeline needs no secret and no
 cloud account, because the module talks to no cloud API.
 
-## Alternatives considered
+## Rejected designs
 
-### The design
-
-**Fixed roles: `random_password.active` and `random_password.backup`.** The resource address
-then carries the role, which reads well. It also makes the role a property of the resource,
-so an exchange needs either state surgery or a new password. One is not reproducible, the
-other destroys the credential it is meant to keep.
-
-Neither mechanism holds up. `moved` blocks cannot express the exchange at all: a plan fails
-with *"Moved object still exists"*, because a move means that the source address is gone from
-the configuration, while a swap needs both addresses to stay. The way around it is a three-step
-move through a temporary address, so three configuration edits and three applies, which busts
-the two-apply requirement on its own.
-
-`terraform state mv` does perform the exchange, and that is the trap. It is imperative state
-surgery beside the plan and apply model: not reviewable in a diff, not idempotent, and unsafe
-in a pipeline. Worse, the keeper values travel with the resources while the configuration keys
-them by role, so the objects land at addresses whose keeper expressions no longer match. The
-next plan — any plan, not the next rotation — then reports `2 to add, 0 to change, 2 to
-destroy`. The swap succeeds and leaves a mine that destroys both credentials. Rejected.
-
-**Fixed roles, copy the value across on a swap.** A `random_password` value is computed by the
-provider, so it cannot be assigned. The design therefore needs a value-carrying resource, and
-that resource holds a second copy of the secret: after one apply the same cleartext password
-sits under two addresses in the state. The doubling is the mechanism here, not a side effect.
-
-The invariant the design exists for — after a swap the backup holds the value that was active
-before — cannot be expressed at all. A carrier can only mirror the current value. Reading its
-own previous one fails with *"Self-referential block"*, and routing it through a second carrier
-fails with *"Cycle"*. The configuration is a graph over the desired state, and "the value from
-before this apply" is not a node in that graph.
-
-`lifecycle { ignore_changes = [input] }` looks like the way out, but it freezes the carrier at
-creation time instead of lagging one step behind. After two rotations the backup holds a value
-that is two generations old, and nothing reports it. A backup that falls arbitrarily far behind
-while looking healthy is worse than none. More parts, one more copy of every secret, and the
-central invariant still unstated. Rejected.
-
-**A ring of N slots with a moving pointer.** One operation, "advance", moves the pointer and
-regenerates the slot that falls off the back. With three slots or more the overlap window gets
-*longer* than the two-slot design allows: the password that was active stays valid as the first
-backup, so a consumer that lags a deploy cycle still holds a value that is accepted.
-Operationally that is the stronger design.
-
-It is rejected on scope, not on merit. The brief asks for rotation and swap as two separate
-operations, and it asks that they cannot run at the same time. "Advance" fuses them, so the
-bonus requirement is not met but voided: nothing is left to exclude. Had the requirement been
-an N-way rotation with history, this is what the module would be.
-
-Two slots therefore stay on purpose, and going to N is not a one-line change. Both hardcoded
-validations in `variables.tf` have to move; `backup_slot` then stops resolving, because `one()`
-receives more than one candidate; and `backup_password`, `backup_slot` and `backup_fingerprint`
-lose their meaning once "the backup" is no longer a single thing. That last part is a change to
-the output contract, which is a change to the design.
-
-**A timestamp or `time_rotating` as the trigger.** Time-based regeneration breaks the
-idempotence requirement by construction, and it breaks it in the worst way. Inside the window a
-plan reports `No changes`. Once the due date passes, the very same configuration replaces the
-`time_rotating` resource, which changes the keeper, which replaces the password. Nobody
-triggered anything; the clock moved. The requirement holds right up until it does not, so a
-reviewer who applies twice sees an idempotence that is not there.
-
-It also forces a decision about how many clocks to run. One shared time source rotates both
-passwords at the same deadline and destroys the overlap the design exists for, in a single
-apply. Avoiding that means one time source per slot with offset schedules: the two phases
-rebuilt as a pair of cron jobs that must never coincide.
-
-A monotonic counter per slot is explicit, readable in a diff, and auditable. `1 → 2` says
-"second rotation of this slot". An opaque token works mechanically, but `f3a9… → 7c21…` says
-only that something changed, which is little help in a merge request. Rejected — although a
-schedule is what a production rotation wants, and this brief rules it out.
-
-### The guard
-
-The pending-change guard runs a plan and reads one exit code. Three simpler designs
-exist. Each one trades something away.
-
-**Let the tool own the apply.** `pwctl rotate` edits the control record and runs the apply in
-one command. One command is then one operation and one apply, so the rule stops being a check
-and becomes a property of the workflow, which is always the stronger form. The apply leaves the
-hands of the reviewer, and a pipeline usually wants a plan before a credential changes. It also
-does nothing about a hand edit: whoever writes the file and applies it directly passes this
-design and the shipped guard alike.
-
-**Check the rule in the pipeline.** The control record lives in the repository, so a merge
-request can carry the rule: read the record from the target branch and judge the transition.
-About fifteen lines of `jq` reject every transition that no single operation could produce — a
-swap together with a rotation, more than one counter moving, a counter that jumps by two or
-falls, and a rotation that targets the active slot instead of the standby one. No local tool is
-needed at all.
-
-Neither guard dominates the other. The local one binds whoever runs `pwctl`, and a hand edit
-followed by a direct apply never reaches it. The pipeline one binds whatever goes through a
-merge request, and two merges before one apply still stack. Only a check on the path that
-applies, comparing `terraform output` with the file, binds every route; the last entry under
-[Limits](#limits-and-next-steps) says why that one is missing here.
-
-**Make the control record a log.** One input, an append-only list of operations, for example
-`["rotate", "swap", "rotate"]`. The module replays it: the parity of the `swap` entries gives
-the active slot, and a `rotate` at position *i* hits the slot that was not active at that point.
-The replay is about ten lines of HCL and it works — that log yields `active=b` with generations
-`{a: 2, b: 2}`.
-
-It buys the strongest property in this document: which slot a rotation hits is derived, not
-supplied, so "rotate the active password" has no representation in the input at all. It is not
-checked, it is unexpressible. The log doubles as an audit trail.
-
-The costs are real. The replay lives in HCL, the record grows without bound, and editing history
-instead of appending to it re-derives everything after the edited entry: changing the first entry
-plans `1 to add, 0 to change, 1 to destroy`, so tampering announces itself by destroying a
-credential. One rule also survives. Appending `"rotate"` and `"swap"` in one go puts a freshly
-generated password straight into the active role in a single apply, with no propagation window.
+Seven designs were tried and dropped: fixed roles moved with `moved` blocks or
+`terraform state mv`, fixed roles that copy the value across on a swap, a ring of N slots
+with a moving pointer, a time-based trigger, and three simpler guards — the tool owning the
+apply, a diff check in the pipeline, and an append-only operation log.
+[DECISIONS.md](DECISIONS.md) carries each one with the error message or the plan summary it
+produces.
 
 ## Security notes
 
@@ -375,18 +253,8 @@ generated password straight into the active role in a single apply, with no prop
   guarantee therefore needs the state lock of the backend, so let the pipeline own both steps
   of a phase.
 - A rotation schedule belongs in the pipeline, not in the module. That is not the time-based
-  trigger rejected above. A scheduler outside Terraform produces an explicit input change: a
-  commit on the control record that a person reviews and merges, so the outcome of a plan
-  never depends on the clock. With `time_rotating` the clock is part of the configuration;
+  trigger rejected in [DECISIONS.md](DECISIONS.md). A scheduler outside Terraform produces an
+  explicit input change: a commit on the control record that a person reviews and merges, so
+  the outcome of a plan never depends on the clock. With `time_rotating` the clock is part of the configuration;
   here it is part of the trigger. Terraform stays idempotent, and the scheduler is what
   moves.
-
-## Layout
-
-```
-.
-├── main.tf, variables.tf, outputs.tf, versions.tf   the module
-├── tests/                                           terraform test, 17 cases
-├── examples/basic/                                  a root module and its control file
-└── tools/                                           the guard tool, bash and jq
-```
