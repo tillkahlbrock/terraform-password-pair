@@ -351,13 +351,21 @@ generated password straight into the active role in a single apply, with no prop
 - **A hand edit can still break the pair. This is open.** `pwctl` is the only writer of the
   control record by convention, not by control. Terraform keeps rejecting an invalid
   record, so the slot names and the counters stay sound, but it cannot reject an invalid
-  *transition*: raising the counter of the active slot replaces the live password, and
-  moving both fields in one edit puts a rotation and a swap in one apply. Every rule beyond
-  validity compares the desired record with the applied one, and a configuration cannot read
-  the prior state. The fix belongs on the path that applies rather than in the tool: a job
+  *transition*: raising the counter of the active slot replaces the live password, lowering
+  any counter replaces a password as well, because the keeper compares for equality and not
+  for growth, and moving both fields in one edit puts a rotation and a swap in one apply. A
+  lowered counter costs twice: a credential is gone, and two different passwords then carry
+  the same generation number, so the audit trail lies. Every rule beyond validity compares the
+  desired record with the applied one, and a configuration cannot read the prior state. The fix belongs on the path that applies rather than in the tool: a job
   before the apply that compares `terraform output` with the file and refuses a transition
   that no single operation could produce. It is not implemented here.
-- `pwctl` locks the working directory. In a pipeline, the same guarantee needs the state
-  lock of the backend, so let the pipeline own both steps of a phase.
-- A rotation schedule belongs in the pipeline, not in the module. `pwctl rotate` in a
-  scheduled job plus a review of the diff keeps the trigger explicit and auditable.
+- `pwctl` locks the working directory, and only that. Two checkouts take two locks: one
+  runner stages a rotation while another stages a swap, and both succeed. In a pipeline the
+  guarantee therefore needs the state lock of the backend, so let the pipeline own both steps
+  of a phase.
+- A rotation schedule belongs in the pipeline, not in the module. That is not the time-based
+  trigger rejected above. A scheduler outside Terraform produces an explicit input change: a
+  commit on the control record that a person reviews and merges, so the outcome of a plan
+  never depends on the clock. With `time_rotating` the clock is part of the configuration;
+  here it is part of the trigger. Terraform stays idempotent, and the scheduler is what
+  moves.
