@@ -325,10 +325,16 @@ generated password straight into the active role in a single apply, with no prop
 - Both passwords are in the Terraform state, in clear text. This is true for every
   `random_*` resource. Use an encrypted remote backend with strict access, for example S3
   with SSE-KMS, DynamoDB locking, and no public read.
-- The outputs are marked `sensitive`, so a plan or an apply does not print them. A root
-  module that exposes them must mark its own outputs as well.
-- `fingerprints` is safe to log. It is a truncated hash over a salted 32-character random
-  password.
+- The two password outputs are marked `sensitive`, so a plan or an apply prints
+  `<sensitive>` in their place. The other six outputs are plain on purpose. A root module
+  that exposes the passwords must mark its own outputs as well.
+- The three fingerprint outputs are safe to log. What protects them is the entropy of the
+  password, not the salt: `slot:generation` is predictable, and it only keeps the
+  fingerprints of one value distinct across slots and generations. Even the weakest shape
+  this module accepts, 16 characters from a single character class, carries about 2^75
+  possibilities. The hash is truncated to 64 bits, which is enough to compare two
+  fingerprints, so "equal fingerprints, equal password" holds with probability 1 - 2^-64
+  rather than absolutely.
 - Do not commit a `*.tfstate` file. `.gitignore` covers the state, the lock directory, and
   a temporary control file left behind by an interrupted write.
 - The state is the source of truth for a password, so a backend restore restores a
